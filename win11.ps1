@@ -30,7 +30,7 @@ function Write-SectionSuccess {
 
 # === Fork branding & source locations ===
 $ScriptName    = 'win11.bencarver.com'
-$ScriptVersion = '25.01.22.1'
+$ScriptVersion = '25.09.15.1'
 
 # If you’re forking the helper BIOS scripts too, point this to YOUR GitHub raw base:
 # Example: 'https://raw.githubusercontent.com/bencarver/osd-scripts/main/OSD/CloudOSD'
@@ -62,14 +62,14 @@ $OSLanguage    = 'en-us'
 
 # Set OSDCloud Vars
 $Global:MyOSDCloud = [ordered]@{
-    Restart                 = [bool]$False
+    Restart                 = [bool]$true
     RecoveryPartition       = [bool]$true
-    OEMActivation           = [bool]$True
+    OEMActivation           = [bool]$true
     WindowsUpdate           = [bool]$true
     WindowsUpdateDrivers    = [bool]$true
     WindowsDefenderUpdate   = [bool]$true
     SetTimeZone             = [bool]$true
-    ClearDiskConfirm        = [bool]$False
+    ClearDiskConfirm        = [bool]$false
     ShutdownSetupComplete   = [bool]$false
     SyncMSUpCatDriverUSB    = [bool]$true
     CheckSHA1               = [bool]$true
