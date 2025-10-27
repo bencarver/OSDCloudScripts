@@ -30,7 +30,7 @@ function Write-SectionSuccess {
 
 # === Fork branding & source locations ===
 $ScriptName    = 'win11.bencarver.com'
-$ScriptVersion = '25.09.15.1'
+$ScriptVersion = '25.10.27.1'
 
 # If you’re forking the helper BIOS scripts too, point this to YOUR GitHub raw base:
 # Example: 'https://raw.githubusercontent.com/bencarver/osd-scripts/main/OSD/CloudOSD'
@@ -54,8 +54,8 @@ $Model         = (Get-MyComputerModel)
 $Manufacturer  = (Get-CimInstance -ClassName Win32_ComputerSystem).Manufacturer
 
 $OSVersion     = 'Windows 11'      # Used to Determine Driver Pack
-$OSReleaseID   = '24H2'            # Used to Determine Driver Pack
-$OSName        = 'Windows 11 24H2 x64'
+$OSReleaseID   = '25H2'            # Used to Determine Driver Pack
+$OSName        = 'Windows 11 25H2 x64'
 $OSEdition     = 'Pro'             # <— changed from Enterprise to Pro
 $OSActivation  = 'Volume'
 $OSLanguage    = 'en-us'
