@@ -58,16 +58,29 @@ $Model         = (Get-MyComputerModel)
 $Manufacturer  = (Get-CimInstance -ClassName Win32_ComputerSystem).Manufacturer
 
 $OSVersion     = 'Windows 11'      # Used to Determine Driver Pack
-# Pin 25H2 (matches OSDCloud.json in the offline path) rather than 'Latest'/'Windows 11', which
-# is dynamic and would jump to the next feature update when it ships. Start-OSDCloud's -OSName
-# ValidSet keeps the " x64" suffix. TODO(windows): reconfirm against `Get-OSDCloudOperatingSystems`.
-#$OSReleaseID   = 'Latest'          # dynamic — would follow whatever MS ships next
-$OSReleaseID   = '25H2'            # Used to Determine Driver Pack
-#$OSName        = 'Windows 11 24H2 x64'
-$OSName        = 'Windows 11 25H2 x64'
+$OSReleaseID   = 'Latest'          # only drives Get-OSDCloudDriverPack; moot for ThinkBooks
 $OSEdition     = 'Pro'             # <— changed from Enterprise to Pro
-$OSActivation  = 'Volume'
+# Retail (not Volume): these Lenovos carry a Windows 11 Pro OEM key in firmware (ACPI/MSDM).
+# The Retail/consumer-channel image + OEMActivation=$true (set in $Global:MyOSDCloud below)
+# activates automatically off that key. Volume would apply a VL image that needs KMS/MAK and
+# would NOT activate off the firmware key. Matches OSDCloud.json in the offline path.
+$OSActivation  = 'Retail'
 $OSLanguage    = 'en-us'
+
+# Always deploy the LATEST Windows 11 feature update without editing this script. Start-OSDCloud
+# has no "-OSName Latest"; its -OSName is a fixed ValidSet, so we read the newest
+# "Windows 11 <ReleaseID> x64" straight from that set (never an invalid value), newest-first.
+# When OSD later adds e.g. 26H2, this picks it up automatically. Falls back to a known-good pin.
+$OSName = 'Windows 11 25H2 x64'    # fallback pin if the ValidSet lookup ever comes back empty
+try {
+    $validOSNames = ((Get-Command Start-OSDCloud -ErrorAction Stop).Parameters['OSName'].Attributes |
+        Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }).ValidValues
+    $latest = $validOSNames | Where-Object { $_ -like 'Windows 11 *x64' } | Sort-Object -Descending | Select-Object -First 1
+    if ($latest) { $OSName = $latest }
+} catch {
+    Write-Warning "Could not resolve latest Windows 11 from OSD ValidSet; using pinned $OSName"
+}
+Write-Host "Resolved latest Windows 11 OSName: $OSName" -ForegroundColor Green
 
 # Set OSDCloud Vars
 $Global:MyOSDCloud = [ordered]@{
