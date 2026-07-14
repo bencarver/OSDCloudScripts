@@ -58,10 +58,13 @@ $Model         = (Get-MyComputerModel)
 $Manufacturer  = (Get-CimInstance -ClassName Win32_ComputerSystem).Manufacturer
 
 $OSVersion     = 'Windows 11'      # Used to Determine Driver Pack
-#$OSReleaseID   = '24H2'            # Used to Determine Driver Pack
-$OSReleaseID   = 'Latest'            # Used to Determine Driver Pack
+# Pin 25H2 (matches OSDCloud.json in the offline path) rather than 'Latest'/'Windows 11', which
+# is dynamic and would jump to the next feature update when it ships. Start-OSDCloud's -OSName
+# ValidSet keeps the " x64" suffix. TODO(windows): reconfirm against `Get-OSDCloudOperatingSystems`.
+#$OSReleaseID   = 'Latest'          # dynamic — would follow whatever MS ships next
+$OSReleaseID   = '25H2'            # Used to Determine Driver Pack
 #$OSName        = 'Windows 11 24H2 x64'
-$OSName        = 'Windows 11'
+$OSName        = 'Windows 11 25H2 x64'
 $OSEdition     = 'Pro'             # <— changed from Enterprise to Pro
 $OSActivation  = 'Volume'
 $OSLanguage    = 'en-us'
