@@ -29,8 +29,12 @@ function Write-SectionSuccess {
 #endregion
 
 # === Fork branding & source locations ===
+# PARITY: this is the ONLINE deploy script (fetched by WinPE via win11.bencarver.com). Its
+# Ambrosia-specific logic — the ZTI disk-safety guard and the ThinkBook driver-pack staging —
+# must stay in sync with the OFFLINE fallback, ventoy-imaging/osdcloud/Invoke-OSDCloud-Ambrosia.ps1.
+# Change one, mirror it in the other, or an online-vs-offline boot behaves differently.
 $ScriptName    = 'win11.bencarver.com'
-$ScriptVersion = '25.10.29.1'
+$ScriptVersion = '26.07.13.1'
 
 # If you’re forking the helper BIOS scripts too, point this to YOUR GitHub raw base:
 # Example: 'https://raw.githubusercontent.com/bencarver/osd-scripts/main/OSD/CloudOSD'
@@ -54,13 +58,29 @@ $Model         = (Get-MyComputerModel)
 $Manufacturer  = (Get-CimInstance -ClassName Win32_ComputerSystem).Manufacturer
 
 $OSVersion     = 'Windows 11'      # Used to Determine Driver Pack
-#$OSReleaseID   = '24H2'            # Used to Determine Driver Pack
-$OSReleaseID   = 'Latest'            # Used to Determine Driver Pack
-#$OSName        = 'Windows 11 24H2 x64'
-$OSName        = 'Windows 11'
+$OSReleaseID   = 'Latest'          # only drives Get-OSDCloudDriverPack; moot for ThinkBooks
 $OSEdition     = 'Pro'             # <— changed from Enterprise to Pro
-$OSActivation  = 'Volume'
+# Retail (not Volume): these Lenovos carry a Windows 11 Pro OEM key in firmware (ACPI/MSDM).
+# The Retail/consumer-channel image + OEMActivation=$true (set in $Global:MyOSDCloud below)
+# activates automatically off that key. Volume would apply a VL image that needs KMS/MAK and
+# would NOT activate off the firmware key. Matches OSDCloud.json in the offline path.
+$OSActivation  = 'Retail'
 $OSLanguage    = 'en-us'
+
+# Always deploy the LATEST Windows 11 feature update without editing this script. Start-OSDCloud
+# has no "-OSName Latest"; its -OSName is a fixed ValidSet, so we read the newest
+# "Windows 11 <ReleaseID> x64" straight from that set (never an invalid value), newest-first.
+# When OSD later adds e.g. 26H2, this picks it up automatically. Falls back to a known-good pin.
+$OSName = 'Windows 11 25H2 x64'    # fallback pin if the ValidSet lookup ever comes back empty
+try {
+    $validOSNames = ((Get-Command Start-OSDCloud -ErrorAction Stop).Parameters['OSName'].Attributes |
+        Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }).ValidValues
+    $latest = $validOSNames | Where-Object { $_ -like 'Windows 11 *x64' } | Sort-Object -Descending | Select-Object -First 1
+    if ($latest) { $OSName = $latest }
+} catch {
+    Write-Warning "Could not resolve latest Windows 11 from OSD ValidSet; using pinned $OSName"
+}
+Write-Host "Resolved latest Windows 11 OSName: $OSName" -ForegroundColor Green
 
 # Set OSDCloud Vars
 $Global:MyOSDCloud = [ordered]@{
@@ -97,6 +117,29 @@ if (Test-DISMFromOSDCloudUSB -eq $true){
 }
 #>
 
+# --- Ambrosia: ThinkBook machine type + manual driver-pack handoff -----------
+# OSDCloud can't auto-inject our ThinkBook packs (21UY G9 IRL / 21SJ G8 IAL are absent from the
+# Lenovo MECM/SCCM catalog it reads). We resolve the 4-char machine type here and, if the media
+# has a pack staged for it (Build-OSDCloudMedia.ps1 -FetchDrivers puts it at
+# OSDCloud\DriverPacks\Ambrosia\<MT>), tell OSDCloud NOT to fetch a pack — we stage it after apply.
+$sku   = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).SystemSKUNumber
+$csMod = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).Model
+$MachineType = if ($sku -match '_MT_([A-Za-z0-9]{4})') { $Matches[1] }
+               elseif ($csMod -match '^([A-Za-z0-9]{4})') { $Matches[1] }
+               else { $null }
+Write-Host ("Ambrosia: target {0}  (SKU {1}; machine type {2})" -f $csMod, $sku, $MachineType) -ForegroundColor Cyan
+
+$AmbrosiaPackSrc = $null
+if ($MachineType) {
+    $AmbrosiaPackSrc = Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter } |
+        ForEach-Object { Join-Path ("{0}:\" -f $_.DriveLetter) ("OSDCloud\DriverPacks\Ambrosia\{0}" -f $MachineType) } |
+        Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+if ($AmbrosiaPackSrc) {
+    Write-Host ("Ambrosia: found staged ThinkBook pack {0}; disabling OSDCloud driver download." -f $AmbrosiaPackSrc) -ForegroundColor Green
+    $Global:MyOSDCloud.DriverPackName = 'None'
+}
+
 # Enable HPIA | Update HP BIOS | Update HP TPM
 if (Test-HPIASupport){
     Write-SectionHeader -Message "Detected HP Device, Enabling HPIA, HP BIOS and HP TPM Updates"
@@ -121,11 +164,53 @@ Write-Output $Global:MyOSDCloud
 
 # Start OSDCloud deployment
 Write-SectionHeader -Message "Starting OSDCloud"
-Write-Host "Start-OSDCloud -OSName $OSName -OSEdition $OSEdition -OSActivation $OSActivation -OSLanguage $OSLanguage"
 
-Start-OSDCloud -OSName $OSName -OSEdition $OSEdition -OSActivation $OSActivation -OSLanguage $OSLanguage
+# --- Ambrosia ZTI disk-safety guard ------------------------------------------
+# ZTI is zero-touch and auto-wipes the internal disk with NO prompt. We only let it engage when
+# there is EXACTLY ONE eligible internal disk; with 0 (dead/absent SSD) or >1 (multi-disk) we fall
+# back to the interactive disk prompt. An internal NVMe reports BusType 'NVMe' (not 'USB'), so the
+# filter keeps it and excludes the boot media. TODO(windows): a USB SSD/HDD bridge can report
+# SATA/NVMe and slip through; test with the exact deploy USB attached before trusting ZTI.
+$ZTIIntent = $false   # keep in sync with OSDCloud.json "ZTI" (offline path); set $true for hands-off
+$eligible = @(Get-Disk | Where-Object { $_.BusType -ne 'USB' -and $_.Size -gt 60GB })
+Write-Host ("Ambrosia: eligible internal disks: {0}" -f $eligible.Count) -ForegroundColor Cyan
+$eligible | Format-Table Number, FriendlyName, BusType, @{n='GB';e={[int]($_.Size/1GB)}} -AutoSize | Out-String | Write-Host
+
+$osdParams = @{ OSName = $OSName; OSEdition = $OSEdition; OSActivation = $OSActivation; OSLanguage = $OSLanguage }
+if ($ZTIIntent -and $eligible.Count -eq 1) {
+    Write-Host "Ambrosia: exactly one eligible internal disk -> zero-touch (ZTI)." -ForegroundColor Green
+    $osdParams.ZTI = $true
+    $Global:MyOSDCloud.ClearDiskConfirm = [bool]$false
+} else {
+    if ($ZTIIntent) { Write-Warning ("Ambrosia: ZTI requested but found {0} eligible internal disks -> disk PROMPT for safety." -f $eligible.Count) }
+    $Global:MyOSDCloud.ClearDiskConfirm = [bool]$true
+}
+
+Write-Host ("Start-OSDCloud {0} {1} {2} {3}  ZTI={4}" -f $OSName,$OSEdition,$OSActivation,$OSLanguage,[bool]$osdParams.ZTI)
+Start-OSDCloud @osdParams
 
 Write-SectionHeader -Message "OSDCloud Process Complete, Running Custom Actions From Script Before Reboot"
+
+# --- Ambrosia: stage the model-matched ThinkBook pack to the target OS -------
+# OSDCloud applied Windows to the internal disk; find that volume (has \Windows, not WinPE's X:)
+# and copy the pack we located on the USB ($AmbrosiaPackSrc) to <OS>:\Drivers\<MT> so
+# SetupComplete\Ambrosia-Post.ps1 can pnputil-install it in the new OS.
+# TODO(windows): confirm the applied-OS drive letter (OSDCloud usually maps it to C:).
+if ($MachineType -and $AmbrosiaPackSrc) {
+    $osVol = Get-Volume -ErrorAction SilentlyContinue |
+        Where-Object { $_.DriveLetter -and $_.DriveLetter -ne 'X' -and (Test-Path ("{0}:\Windows\System32" -f $_.DriveLetter)) } |
+        Select-Object -First 1
+    if ($osVol) {
+        $dst = "{0}:\Drivers\{1}" -f $osVol.DriveLetter, $MachineType
+        Write-Host ("Ambrosia: staging driver pack {0} -> {1}" -f $AmbrosiaPackSrc, $dst) -ForegroundColor Cyan
+        New-Item -ItemType Directory -Force -Path $dst | Out-Null
+        Copy-Item -Path (Join-Path $AmbrosiaPackSrc '*') -Destination $dst -Recurse -Force
+    } else {
+        Write-Warning "Ambrosia: could not find the applied-OS volume; skipping driver-pack staging (OS falls back to Windows Update drivers)."
+    }
+} elseif ($MachineType) {
+    Write-Warning ("Ambrosia: no staged pack for machine type {0} on the media; OS falls back to Windows Update drivers." -f $MachineType)
+}
 
 # Copy CMTrace local (handy for post-install log viewing)
 if (Test-Path -Path "x:\windows\system32\cmtrace.exe"){
